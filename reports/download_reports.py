@@ -76,7 +76,15 @@ def convert(code, name, year, pdf_url, pdf_dir, txt_dir, flag_pdf):
         with pdfplumber.open(pdf_file_path) as pdf:
             with open(txt_file_path, 'w', encoding='utf-8') as f:
                 for page in pdf.pages:
-                    text = page.extract_text()
+                    
+                    page_height = page.height
+                    page_width = page.width
+                    top_margin = 80
+                    bottom_margin = 65
+                    # 生成一个裁剪区域（bounding box: (x0, top, x1, bottom)）
+                    cropped_page = page.crop((0, top_margin, page_width, page_height - bottom_margin))
+                    
+                    text = cropped_page.extract_text()
                     f.write(text)
 
         logging.info(f"{txt_file_path} 已保存.")
@@ -138,5 +146,5 @@ if __name__ == '__main__':
     csv_file = os.path.join('results', '2015_2025_年报汇总.csv')
     
     # 测试处理单个股票的年报
-    test_stock_code = '000001'  # 以平安银行为例
+    test_stock_code = '002594'
     process_stock_reports(test_stock_code, csv_file, delete_pdf=False)
