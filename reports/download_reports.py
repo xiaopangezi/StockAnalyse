@@ -4,6 +4,8 @@ import os
 import logging
 import pdfplumber
 import pandas as pd
+from datetime import datetime
+from fetch_reports import main as fetch_reports_main
 
 #下载pdf
 def download_pdf(pdf_url, pdf_file_path):
@@ -73,21 +75,21 @@ def convert(code, name, year, pdf_url, pdf_dir, txt_dir, flag_pdf):
                 return
 
         # 转换PDF文件为TXT文件
-        with pdfplumber.open(pdf_file_path) as pdf:
-            with open(txt_file_path, 'w', encoding='utf-8') as f:
-                for page in pdf.pages:
+        # with pdfplumber.open(pdf_file_path) as pdf:
+        #     with open(txt_file_path, 'w', encoding='utf-8') as f:
+        #         for page in pdf.pages:
                     
-                    page_height = page.height
-                    page_width = page.width
-                    top_margin = 80
-                    bottom_margin = 65
-                    # 生成一个裁剪区域（bounding box: (x0, top, x1, bottom)）
-                    cropped_page = page.crop((0, top_margin, page_width, page_height - bottom_margin))
+        #             page_height = page.height
+        #             page_width = page.width
+        #             top_margin = 80
+        #             bottom_margin = 65
+        #             # 生成一个裁剪区域（bounding box: (x0, top, x1, bottom)）
+        #             cropped_page = page.crop((0, top_margin, page_width, page_height - bottom_margin))
                     
-                    text = cropped_page.extract_text()
-                    f.write(text)
+        #             text = cropped_page.extract_text()
+        #             f.write(text)
 
-        logging.info(f"{txt_file_path} 已保存.")
+        # logging.info(f"{txt_file_path} 已保存.")
 
     except Exception as e:
         logging.error(f"处理 {code:06}_{name}_{year}时出错： {e}")
@@ -141,10 +143,40 @@ def process_stock_reports(stock_code, csv_file, delete_pdf=True):
     except Exception as e:
         logging.error(f"处理过程中出错: {e}")
 
+def ensure_stock_reports(stock_code: str, results_dir: str, delete_pdf: bool = False) -> str:
+    """
+    确保指定股票的年报数据可用，如果需要则下载CSV和年报文件
+    :param stock_code: 股票代码
+    :param results_dir: 结果目录路径
+    :param delete_pdf: 是否在转换后删除PDF文件
+    :return: 处理结果信息
+    """
+    try:
+        start_year = 2015
+        # 查找年报汇总文件
+        end_year = datetime.now().year
+        csv_file_name = f"{start_year}_{end_year}_年报汇总.csv"
+        csv_files = [f for f in os.listdir(results_dir) if f == csv_file_name]
+        
+        if not csv_files:
+            # 如果没有找到CSV文件，则下载
+            fetch_reports_main(start_year, end_year)
+            csv_file = os.path.join(results_dir, f'{start_year}_{end_year}_年报汇总.csv')
+        else:
+            csv_file = os.path.join(results_dir, csv_files[0])
+
+        if not os.path.exists(csv_file):
+            return "错误：下载年报汇总CSV文件失败"
+
+        # 处理股票年报
+        process_stock_reports(stock_code, csv_file, delete_pdf)
+        return f"成功下载并转换股票 {stock_code} 的年报"
+        
+    except Exception as e:
+        return f"处理股票 {stock_code} 的年报时出错：{str(e)}"
+
 if __name__ == '__main__':
     # 测试代码
-    csv_file = os.path.join('results', '2015_2025_年报汇总.csv')
-    
-    # 测试处理单个股票的年报
+    results_dir = os.path.join('results')
     test_stock_code = '002594'
-    process_stock_reports(test_stock_code, csv_file, delete_pdf=False)
+    print(ensure_stock_reports(test_stock_code, results_dir, delete_pdf=False))

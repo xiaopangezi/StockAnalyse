@@ -1,7 +1,7 @@
 """
-strategies.py
+strategies_buffett.py
 
-实现股票筛选策略：
+巴菲特股票筛选策略：
 1. 资产负债率 > 50%
 2. 净资产收益率 > 15%
 3. 销售毛利率 > 30%
@@ -18,24 +18,46 @@ from stock_data_fetcher import (
     get_financial_indicator
 )
 
-def analyze_stock(stock_code, exchange):
+def analyze_stock(stock_code, exchange, industry=None):
     """
-    分析单个股票的财务数据
+    分析股票是否符合投资策略
     
     Args:
         stock_code (str): 股票代码
-        exchange (str): 交易所代码
-    
+        exchange (str): 交易所标识
+        industry (str, optional): 行业名称，如果提供则进行行业筛选
+        
     Returns:
-        dict or None: 符合条件的股票信息，不符合则返回None
+        tuple: (bool, dict)
+        - bool: 是否符合投资策略
+        - dict: 分析结果详情
     """
     try:
+        # 如果指定了行业，先进行行业筛选
+        if industry is not None:
+            from .stock_data_fetcher import get_stock_detail
+            
+            # 获取股票详细信息
+            stock_detail = get_stock_detail(stock_code)
+            if stock_detail.empty:
+                return False, {"error": "无法获取股票详细信息"}
+            
+            # 获取股票所属行业
+            stock_industry = stock_detail['行业'].iloc[0] if '行业' in stock_detail.columns else None
+            
+            # 如果无法获取行业信息或行业不匹配，直接返回
+            if not stock_industry or industry.lower() not in stock_industry.lower():
+                return False, {
+                    "reason": "行业不匹配",
+                    "stock_industry": stock_industry,
+                    "target_industry": industry
+                }
         
         # 1. 获取财务报表数据
         abstract_data = get_financial_abstract(stock_code)
         if abstract_data is None or abstract_data.empty:
             print(f"{stock_code}: 获取财务报表数据失败")
-            return None
+            return False, {"error": "无法获取财务报表数据"}
         # 获取最近5年的数据
         # 由于数据按时间倒序排列，取最后5行即为最近5年
         recent_5_years = abstract_data.tail(5)
@@ -46,11 +68,11 @@ def analyze_stock(stock_code, exchange):
                 roe = float(year_data['净资产收益率-摊薄'].strip('%')) # 去掉百分号后再转换为浮点数
                 if roe <= 15:
                     print(f"{stock_code}: 净资产收益率 {roe}% <= 15%")
-                    return None
+                    return False, {"reason": "净资产收益率低于15%", "roe": roe}
             except (ValueError, TypeError):
                 # 数据转换失败时返回None
                 print(f"{stock_code}: 净资产收益率数据转换失败")
-                return None
+                return False, {"error": "净资产收益率数据转换失败"}
             
         # 获取最新一年的数据
         # 获取最新一年的数据（数据按时间倒序排列，最后一行是最新数据）
@@ -63,13 +85,13 @@ def analyze_stock(stock_code, exchange):
             float(latest_abstract['销售净利率'].strip('%')) > 10
         ):
             print(f"{stock_code}: 财务指标不符合要求 - 资产负债率:{latest_abstract['资产负债率']}, 销售毛利率:{latest_abstract['销售毛利率']}, 销售净利率:{latest_abstract['销售净利率']}")
-            return None
+            return False, {"reason": "财务指标不符合要求", "asset_liability_ratio": latest_abstract['资产负债率'], "gross_profit_margin": latest_abstract['销售毛利率'], "net_profit_margin": latest_abstract['销售净利率']}
             
         # 2. 获取现金流量表数据
         cash_flow_data = get_cash_flow(stock_code)
         if cash_flow_data is None or cash_flow_data.empty:
             print(f"{stock_code}: 获取现金流量表数据失败")
-            return None
+            return False, {"error": "无法获取现金流量表数据"}
             
         # 获取最新一年的数据
         latest_cash_flow = cash_flow_data.iloc[0]
@@ -80,13 +102,13 @@ def analyze_stock(stock_code, exchange):
         
         if free_cash_flow <= 0:
             print(f"{stock_code}: 自由现金流为负 ({free_cash_flow})")
-            return None
+            return False, {"reason": "自由现金流为负", "free_cash_flow": free_cash_flow}
             
         # 3. 获取财务分析指标
         indicator_data = get_financial_indicator(stock_code, start_year='2020')
         if indicator_data is None or indicator_data.empty:
             print(f"{stock_code}: 获取财务分析指标数据失败")
-            return None
+            return False, {"error": "无法获取财务分析指标数据"}
             
         # 获取最新一年的数据
         latest_indicator = indicator_data.iloc[-1]
@@ -94,10 +116,10 @@ def analyze_stock(stock_code, exchange):
         # 检查主营利润比率
         if float(latest_indicator['主营利润比重']) <= 70:
             print(f"{stock_code}: 主营利润比重 {latest_indicator['主营利润比重']}% <= 70%")
-            return None
+            return False, {"reason": "主营利润比重低于70%", "main_business_ratio": latest_indicator['主营利润比重']}
             
         # 收集符合条件的股票信息
-        return {
+        return True, {
             'stock_code': stock_code,
             'exchange': exchange,
             'asset_liability_ratio': latest_abstract['资产负债率'],
@@ -110,7 +132,7 @@ def analyze_stock(stock_code, exchange):
         
     except Exception as e:
         print(f"分析股票 {stock_code} 时出错: {str(e)}")
-        return None
+        return False, {"error": f"分析过程出错: {str(e)}"}
 
 
 # 计算自由现金流
@@ -128,7 +150,7 @@ def convert_to_float(amount_str):
         return float(amount_str)
 
 
-def screen_stocks(output_file='results/screened_stocks.csv'):
+def screen_stocks(output_file='results/screened_stocks.csv', industry=None):
     """
     筛选所有符合条件的股票
     
@@ -147,12 +169,12 @@ def screen_stocks(output_file='results/screened_stocks.csv'):
         print(f"\r处理进度: {idx}/{total_stocks} ({idx/total_stocks*100:.2f}%)", end='')
         
         # 分析股票
-        result = analyze_stock(code, row['exchange'])
-        if result:
-            qualified_stocks.append(result)
+        result = analyze_stock(code, row['exchange'], industry)
+        if result[0]: # 检查返回的第一个元素是否为True
+            qualified_stocks.append(result[1])
     
     print("\n筛选完成!")
-    
+
     # 保存结果
     if qualified_stocks:
         df_result = pd.DataFrame(qualified_stocks)
