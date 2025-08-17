@@ -11,11 +11,12 @@ strategies_buffett.py
 """
 
 import pandas as pd
-from stock_data_fetcher import (
+from .stock_data_fetcher import (
     get_stock_list,
     get_financial_abstract,
     get_cash_flow,
-    get_financial_indicator
+    get_financial_indicator,
+    get_stock_detail
 )
 
 def analyze_stock(stock_code, exchange, industry=None):
@@ -35,7 +36,6 @@ def analyze_stock(stock_code, exchange, industry=None):
     try:
         # 如果指定了行业，先进行行业筛选
         if industry is not None:
-            from .stock_data_fetcher import get_stock_detail
             
             # 获取股票详细信息
             stock_detail = get_stock_detail(stock_code)

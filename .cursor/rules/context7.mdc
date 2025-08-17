@@ -1,0 +1,42 @@
+---
+alwaysApply: true
+---
+# Context7 Documentation and Code Examples Rule
+
+When users request code examples, code writing, setup instructions, configuration steps, or library/API documentation, use the Context7 MCP tools to provide accurate, up-to-date information.
+
+## When to Apply This Rule
+
+Use Context7 tools when users ask for:
+- Code examples for specific libraries or frameworks
+- Setup and installation instructions
+- Configuration steps for tools or libraries
+- API documentation and usage patterns
+- Best practices for specific technologies
+- Integration guides
+- Troubleshooting common issues
+
+## Process
+
+1. **Identify the Library/Technology**: Determine what library, framework, or technology the user is asking about.
+
+2. **Resolve Library ID**: Use `mcp_context7_resolve-library-id` to find the correct Context7-compatible library ID for the requested technology.
+
+3. **Fetch Documentation**: Use `mcp_context7_get-library-docs` with the resolved library ID to get relevant documentation.
+
+4. **Provide Focused Response**: Extract and present the most relevant information for the user's specific request.
+
+## Example Usage Patterns
+
+- "How do I set up React with TypeScript?" → Resolve React library → Fetch setup docs
+- "Show me examples of using MongoDB with Node.js" → Resolve MongoDB library → Fetch code examples
+- "How to configure Next.js routing?" → Resolve Next.js library → Fetch routing documentation
+- "What are the authentication options in Supabase?" → Resolve Supabase library → Fetch auth docs
+
+## Guidelines
+
+- Always resolve the library ID first unless the user provides an exact Context7 ID format (`/org/project` or `/org/project/version`)
+- Focus documentation requests using the `topic` parameter when possible
+- Provide practical, actionable examples rather than just theoretical documentation
+- Include relevant code snippets and configuration examples
+- Mention any prerequisites or dependencies needed

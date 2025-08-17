@@ -1,27 +1,37 @@
 import os
+from dotenv import load_dotenv
 import json
 import logging
+import sys
 from datetime import datetime
 from typing import List, Dict, Any
 
 from langchain.text_splitter import RecursiveCharacterTextSplitter
 from langchain_openai import ChatOpenAI
-from langchain.prompts import ChatPromptTemplate
+from langchain.prompts import ChatPromptTemplate, MessagesPlaceholder
 from langchain.chains import LLMChain, ConversationChain
 from langchain.agents import AgentExecutor, create_structured_chat_agent
 from langchain_core.messages import SystemMessage
 from langchain.tools import Tool
 from langchain_community.docstore.wikipedia import Wikipedia
-from langchain_community.embeddings import HuggingFaceEmbeddings
-from langchain_community.vectorstores import Chroma
+from langchain_huggingface  import HuggingFaceEmbeddings
+from langchain_chroma import Chroma
 from langchain.memory import ConversationBufferMemory
-from langchain.memory.chat_message_histories import StreamlitChatMessageHistory
+from langchain_community.chat_message_histories import StreamlitChatMessageHistory
 from langchain.callbacks.streamlit import StreamlitCallbackHandler
 import pandas as pd
 
-from download_reports import ensure_stock_reports
+# 添加项目根目录到Python路径
+root_dir = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+if root_dir not in sys.path:
+    sys.path.insert(0, root_dir)
+
+from reports.download_reports import ensure_stock_reports
+from reports.pdf_parser import process_pdf
 from analyze.strategies_buffett import analyze_stock, screen_stocks
-from pdf_parser import process_pdf
+
+# 加载 .env 文件中的环境变量
+load_dotenv()
 
 # 设置日志
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
@@ -316,13 +326,26 @@ class ReportAnalyzer:
 
     def setup_agents(self):
         """设置不同任务的agents"""
+        # 创建工具
+        download_tool = self.create_download_tool()
+        screening_tool = self.create_stock_screening_tool()
+        wiki_tool = self.create_wiki_search_tool()
+        retriever_tool = self.create_retriever_tool()
+        final_tools = [download_tool, screening_tool, wiki_tool, retriever_tool]
+        
         # 年报分析agent
         system_message = """你是一个专业的财务分析师，擅长分析企业年报。你的分析应该：
             1. 客观准确，基于事实和数据
             2. 重点突出，抓住关键信息
             3. 逻辑清晰，层次分明
             4. 专业严谨，用词准确
+
+            你有以下工具可以使用：
+            {tools}
+
+            可用的工具名称：{tool_names}
         """
+        
         human_message = """
             请分析以下年报内容：
             {text_chunk}
@@ -345,15 +368,23 @@ class ReportAnalyzer:
             \n前面的工具使用记录：\n{agent_scratchpad}
         """
         
+        prompt = ChatPromptTemplate.from_messages([
+            ("system", system_message),
+            MessagesPlaceholder(variable_name="chat_history", optional=True),
+            ("human", human_message),
+        ])
+        
         self.single_report_agent = create_structured_chat_agent(
             llm=self.llm,
-            tools=[],
-            prompt=ChatPromptTemplate([
-                ("system", system_message),
-                ("human", human_message),
-            ]),
+            tools=final_tools,
+            prompt=prompt
         )
-        self.single_report_executor = AgentExecutor(agent=self.single_report_agent, tools=[])
+        self.single_report_executor = AgentExecutor(
+            agent=self.single_report_agent,
+            tools=final_tools,
+            memory=self.memory,
+            verbose=True
+        )
 
         # 多年对比agent
         comparison_system_message = """你是一个资深的企业战略分析师，擅长对比分析企业多年发展历程。你的分析应该：
@@ -361,37 +392,50 @@ class ReportAnalyzer:
             2. 评估战略执行力
             3. 判断管理层能力
             4. 预测未来发展
+
+            你有以下工具可以使用：
+            {tools}
+
+            可用的工具名称：{tool_names}
         """
+        
+        comparison_prompt = ChatPromptTemplate.from_messages([
+            ("system", comparison_system_message),
+            MessagesPlaceholder(variable_name="chat_history", optional=True),
+            ("human", """
+                请对比分析该公司多年的年报数据：
+                {yearly_analyses}
+                
+                请从以下维度进行分析：
+                1. 计划执行力分析：
+                - 去年计划与今年实际的对比
+                - 完成度评估
+                - 未完成项目原因分析
+                
+                2. 战略连续性分析：
+                - 战略方向变化
+                - 战略执行的连续性
+                - 转型或调整的合理性
+                
+                3. 管理层决策评估：
+                - 重大决策的效果
+                - 风险应对措施的有效性
+                - 管理层执行力评价
+                \n前面的工具使用记录：\n{agent_scratchpad}
+            """),
+        ])
         
         self.comparison_agent = create_structured_chat_agent(
             llm=self.llm,
-            tools=[],
-            prompt=ChatPromptTemplate([
-                ("system", comparison_system_message),
-                ("human", """
-                    请对比分析该公司多年的年报数据：
-                    {yearly_analyses}
-                    
-                    请从以下维度进行分析：
-                    1. 计划执行力分析：
-                    - 去年计划与今年实际的对比
-                    - 完成度评估
-                    - 未完成项目原因分析
-                    
-                    2. 战略连续性分析：
-                    - 战略方向变化
-                    - 战略执行的连续性
-                    - 转型或调整的合理性
-                    
-                    3. 管理层决策评估：
-                    - 重大决策的效果
-                    - 风险应对措施的有效性
-                    - 管理层执行力评价
-                    \n前面的工具使用记录：\n{agent_scratchpad}
-                """),
-            ])
+            tools=final_tools,
+            prompt=comparison_prompt
         )
-        self.comparison_executor = AgentExecutor(agent=self.comparison_agent, tools=[])
+        self.comparison_executor = AgentExecutor(
+            agent=self.comparison_agent,
+            tools=final_tools,
+            memory=self.memory,
+            verbose=True
+        )
 
         # 最终总结agent
         final_system_message = """你是一个专业的投资顾问，需要基于企业分析给出专业的投资建议。你的分析应该：
@@ -399,62 +443,60 @@ class ReportAnalyzer:
             2. 前瞻性强
             3. 建议可执行
             4. 风险提示充分
+
+            你有以下工具可以使用：
+            {tools}
+
+            可用的工具名称：{tool_names}
         """
         
-        # 创建工具
-        download_tool = self.create_download_tool()
-        screening_tool = self.create_stock_screening_tool()
-        wiki_tool = self.create_wiki_search_tool()
-        retriever_tool = self.create_retriever_tool()
-        
-        # 设置Agent的回调
-        callbacks = [self.callback_handler] if self.callback_handler else None
+        final_prompt = ChatPromptTemplate.from_messages([
+            ("system", final_system_message),
+            MessagesPlaceholder(variable_name="chat_history", optional=True),
+            ("human", """
+                请基于以下信息生成综合分析报告：
+                公司信息：{company_info}
+                多年分析：{multi_year_analysis}
+                
+                请从以下维度进行深入分析：
+                1. 行业分析：
+                   - 行业发展阶段
+                   - 行业竞争格局
+                   - 未来发展趋势
+                
+                2. 宏观影响：
+                   - 政策影响
+                   - 经济周期影响
+                   - 技术变革影响
+                
+                3. 公司战略：
+                   - 战略定位评估
+                   - 转型效果分析
+                   - 核心竞争力分析
+                
+                4. 管理层评估：
+                   - 管理团队背景
+                   - 过往业绩表现
+                   - 社会评价分析
+                
+                5. 投资建议：
+                   - 投资价值分析
+                   - 主要风险提示
+                   - 具体投资建议
+                \n前面的工具使用记录：\n{agent_scratchpad}
+            """),
+        ])
         
         self.final_agent = create_structured_chat_agent(
             llm=self.llm,
-            tools=[download_tool, screening_tool, wiki_tool, retriever_tool],
-            prompt=ChatPromptTemplate([
-                ("system", final_system_message),
-                ("human", """
-            请基于以下信息生成综合分析报告：
-            公司信息：{company_info}
-            多年分析：{multi_year_analysis}
-            聊天历史：{chat_history}
-            
-            请从以下维度进行深入分析：
-            1. 行业分析：
-               - 行业发展阶段
-               - 行业竞争格局
-               - 未来发展趋势
-            
-            2. 宏观影响：
-               - 政策影响
-               - 经济周期影响
-               - 技术变革影响
-            
-            3. 公司战略：
-               - 战略定位评估
-               - 转型效果分析
-               - 核心竞争力分析
-            
-            4. 管理层评估：
-               - 管理团队背景
-               - 过往业绩表现
-               - 社会评价分析
-            
-            5. 投资建议：
-               - 投资价值分析
-               - 主要风险提示
-               - 具体投资建议
-            \n前面的工具使用记录：\n{agent_scratchpad}
-            """),
-            ])
+            tools=final_tools,
+            prompt=final_prompt
         )
         self.final_executor = AgentExecutor(
             agent=self.final_agent,
-            tools=[download_tool, screening_tool, wiki_tool, retriever_tool],
+            tools=final_tools,
             memory=self.memory,
-            callbacks=callbacks,
+            callbacks=[self.callback_handler] if self.callback_handler else None,
             verbose=True
         )
 
@@ -596,11 +638,49 @@ class ReportAnalyzer:
         :return: AI回复
         """
         try:
-            # 使用Agent处理消息
-            response = self.final_executor.invoke({
-                "input": message
-            })
+            # 1. 意图识别系统提示
+            intent_prompt = ChatPromptTemplate.from_messages([
+                ("system", """你是一个金融分析助手，需要理解用户的意图并选择合适的处理方式。
+                可能的意图类别：
+                1. SINGLE_REPORT - 分析单个年报（例如：分析平安银行2023年报）
+                2. COMPARE_REPORTS - 对比多年报表（例如：对比平安银行近3年业绩）
+                3. INVESTMENT_ADVICE - 请求投资建议（例如：平安银行值得投资吗）
+                4. DOWNLOAD_REPORT - 下载年报（例如：下载平安银行的年报）
+                5. STOCK_SCREENING - 股票筛选（例如：筛选白酒板块股票）
+                6. GENERAL_QUERY - 一般查询（例如：什么是ROE）
+                """),
+                ("human", "{message}")
+            ])
+
+            # 2. 使用 LLM 进行意图识别
+            intent_chain = LLMChain(llm=self.llm, prompt=intent_prompt)
+            intent_result = intent_chain.invoke({"message": message})
+            intent = intent_result['text'].strip().split('\n')[0]  # 获取第一行作为意图
+
+            # 3. 根据意图选择处理方式
+            if "SINGLE_REPORT" in intent:
+                # 使用单报表分析 agent
+                response = self.single_report_executor.invoke({
+                    "input": message
+                })
+            elif "COMPARE_REPORTS" in intent:
+                # 使用报表对比 agent
+                response = self.comparison_executor.invoke({
+                    "input": message
+                })
+            elif "INVESTMENT_ADVICE" in intent:
+                # 使用投资建议 agent
+                response = self.final_executor.invoke({
+                    "input": message
+                })
+            else:
+                # 默认使用通用 agent 处理其他查询
+                response = self.final_executor.invoke({
+                    "input": message
+                })
+
             return response["output"]
+
         except Exception as e:
             logging.error(f"处理消息时出错: {str(e)}")
             return f"抱歉，处理您的消息时出现错误：{str(e)}"

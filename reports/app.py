@@ -2,14 +2,37 @@
 app.py
 
 使用Streamlit创建聊天界面，用于与年报分析AI进行交互
+
+启动：streamlit run app.py
+
+使用：
+uv venv --python 3.11 .venv 指定python版本并创建虚拟环境
+source .venv/bin/activate 开启python虚拟环境
+uv pip install -r pyproject.toml 安装依赖
+uv pip install 添加依赖
+
+which python 验证虚拟环境是否正确
+
+deactivate 关闭python虚拟环境
+
+uv pip show streamlit 显示已安装版本
+
+streamlit run app.py 启动streamlit应用
+
 """
 
 import os
+import sys
 import streamlit as st
-from langchain.memory.chat_message_histories import StreamlitChatMessageHistory
+from langchain_community.chat_message_histories import StreamlitChatMessageHistory
 from langchain.callbacks.streamlit import StreamlitCallbackHandler
 
-from LLM_reports import ReportAnalyzer
+# 添加项目根目录到Python路径
+root_dir = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+if root_dir not in sys.path:
+    sys.path.insert(0, root_dir)
+
+from reports.LLM_reports import ReportAnalyzer
 
 # 设置页面配置
 st.set_page_config(
@@ -52,24 +75,6 @@ with st.sidebar:
     - 可以询问具体的财务指标
     - 支持多轮对话和上下文理解
     """)
-    
-    # 添加PDF处理功能
-    st.markdown("---")
-    st.subheader("添加年报PDF")
-    uploaded_file = st.file_uploader("选择PDF文件", type="pdf")
-    if uploaded_file:
-        # 保存上传的文件
-        pdf_dir = os.path.join(st.session_state.analyzer.results_dir, 'pdf_reports')
-        os.makedirs(pdf_dir, exist_ok=True)
-        pdf_path = os.path.join(pdf_dir, uploaded_file.name)
-        
-        with open(pdf_path, "wb") as f:
-            f.write(uploaded_file.getvalue())
-        
-        # 处理PDF文件
-        with st.spinner("正在处理PDF文件..."):
-            st.session_state.analyzer.process_and_store_pdf(pdf_path)
-        st.success(f"成功处理文件：{uploaded_file.name}")
 
 # 主聊天界面
 st.title("💬 与AI助手对话")
