@@ -126,10 +126,10 @@ def test_new_feature(self):
     """测试新功能"""
     # 准备测试数据
     test_data = "测试数据"
-    
+
     # 执行被测试的功能
     result = self.parser.new_feature(test_data)
-    
+
     # 验证结果
     self.assertEqual(result, "期望结果")
 ```
@@ -138,11 +138,11 @@ def test_new_feature(self):
 ```python
 class TestNewClass(unittest.TestCase):
     """测试新类"""
-    
+
     def setUp(self):
         """测试前的准备工作"""
         self.instance = NewClass()
-    
+
     def test_method(self):
         """测试方法"""
         # 测试代码

@@ -29,12 +29,12 @@ def test_data_dir():
 def mock_pdf_reader():
     """模拟PDF读取器"""
     from unittest.mock import Mock
-    
+
     mock_reader = Mock()
     mock_reader.pages = [Mock() for _ in range(10)]  # 模拟10页
-    
+
     # 模拟页面文本提取
     for i, page in enumerate(mock_reader.pages):
         page.extract_text.return_value = f"第{i+1}页的内容"
-    
+
     return mock_reader

@@ -249,14 +249,80 @@ class PdfParser:
                         next_sibling = node.children[i + 1]
                         current_child.next_sibling_page = next_sibling.page_number
                     else:
-                        # 如果是最后一个子节点，next_sibling_page保持None
-                        current_child.next_sibling_page = None
+                        # 如果是最后一个子节点，递归查找上层可用的下一章节起始页
+                        next_start_page = self._find_next_start_page(current_child)
+                        current_child.next_sibling_page = next_start_page
 
                     # 递归处理子节点
                     self._set_next_sibling_pages(current_child)
 
         except Exception as e:
             logging.error(f"设置next_sibling_page时出错: {str(e)}")
+
+    def _find_next_sibling_page_recursive(self, node: PdfOutlineNode) -> int:
+        """
+        递归查找节点的下一兄弟节点页码
+        处理多层嵌套的情况，如果当前层没有下一兄弟节点，则向上查找
+        :param node: 当前节点
+        :return: 下一兄弟节点的页码，如果没有找到则返回PDF最大页数
+        """
+        try:
+            # 如果到达根节点，说明已经到达目录最后，返回PDF最大页数
+            if not node.parent or node.parent.title == "Root":
+                return len(self.reader.pages)
+
+            # 尝试获取当前节点的下一兄弟节点
+            next_sibling = self._get_next_sibling_node(node)
+            if next_sibling:
+                return next_sibling.page_number
+
+            # 如果没有下一兄弟节点，递归查找父节点的下一兄弟节点
+            return self._find_next_sibling_page_recursive(node.parent)
+
+        except Exception as e:
+            logging.error(f"递归查找下一兄弟节点页码时出错: {str(e)}")
+            return len(self.reader.pages)
+
+    def _first_valid_page_in_subtree(self, node: PdfOutlineNode) -> Optional[int]:
+        """
+        返回子树中第一个有效的页码（优先节点自身，其次最左侧子孙）
+        """
+        if node.page_number and node.page_number > 0:
+            return node.page_number
+        for child in getattr(node, 'children', []) or []:
+            page = self._first_valid_page_in_subtree(child)
+            if page:
+                return page
+        return None
+
+    def _find_next_start_page(self, node: PdfOutlineNode) -> int:
+        """
+        递归向上查找，获取当前节点之后的“下一章节”的起始页：
+        - 若有同级下一兄弟，返回该兄弟（或其最左子孙）页码
+        - 若无，则向上寻找祖先的下一兄弟，返回其（或其最左子孙）页码
+        - 若最终到达根节点仍无，返回PDF最大页数
+        """
+        try:
+            current: Optional[PdfOutlineNode] = node
+            while current is not None:
+                next_sibling = self._get_next_sibling_node(current)
+                if next_sibling:
+                    # 找到同级的下一个节点，取其自身或其最左子孙的有效起始页
+                    page = self._first_valid_page_in_subtree(next_sibling)
+                    if page and page > 0:
+                        return page
+                    # 如果没有有效页码，继续向上寻找
+                # 向上提升一个层级
+                if not current.parent or current.parent.title == "Root":
+                    # 已到顶层，无更多兄弟，返回文档末尾
+                    return len(self.reader.pages)
+                current = current.parent
+
+            # 兜底：返回文档末尾
+            return len(self.reader.pages)
+        except Exception as e:
+            logging.error(f"查找下一章节起始页时出错: {str(e)}")
+            return len(self.reader.pages)
 
     def save_outline_to_json(self, output_path: str) -> bool:
         """
@@ -358,7 +424,7 @@ class PdfParser:
             start_page = node.page_number - 1  # 转换为0基础的页码
 
             # 获取精确的结束位置：下一小节的标题开头
-            end_page = self._get_precise_end_page(node)
+            end_page = node.next_sibling_page - 1 # 转换为0基础的页码
 
             if start_page < 0 or start_page >= len(self.reader.pages):
                 logging.error(f"起始页码超出范围: {start_page}, 总页数: {len(self.reader.pages)}")
@@ -369,12 +435,12 @@ class PdfParser:
                 end_page = len(self.reader.pages)
 
             content = []
-            # 兼容单页章节的情况：如果start_page和end_page相同，也要处理这一页
+
             if start_page == end_page:
                 logging.info(f"章节 '{node.title}' 为单页章节，页码: {start_page + 1}")
                 page_range = [start_page]
             else:
-                page_range = range(start_page, end_page)
+                page_range = range(start_page, end_page + 1)
                 logging.debug(f"章节 '{node.title}' 跨页处理，页码范围: {start_page + 1} - {end_page}")
 
             for page_num in page_range:
@@ -397,7 +463,7 @@ class PdfParser:
                             logging.debug(f"在第 {page_num + 1} 页未找到标题: '{node.title}'")
 
                     # 如果是最后一页或者是单页章节，都需要检查是否需要截取到下一小节标题开头
-                    if (page_num == end_page - 1 or start_page == end_page) and end_page < len(self.reader.pages):
+                    if (page_num == end_page or start_page == end_page) and end_page < len(self.reader.pages):
                         next_section_title = self._get_next_section_title(node)
                         if next_section_title:
                             # 查找下一小节标题在文本中的位置
@@ -425,27 +491,6 @@ class PdfParser:
         except Exception as e:
             logging.error(f"提取章节内容时出错: {str(e)}")
             return ""
-
-    def _get_precise_end_page(self, node: PdfOutlineNode) -> int:
-        """
-        获取精确的结束页码：下一小节的标题开头
-        :param node: 当前节点
-        :return: 结束页码（0基础）
-        """
-        # 首先尝试获取下一兄弟节点
-        next_sibling = self._get_next_sibling_node(node)
-
-        if next_sibling:
-            # 如果有下一兄弟节点，返回其页码
-            return next_sibling.page_number - 1
-
-        # 如果没有下一兄弟节点，尝试获取父节点的下一兄弟节点
-        parent_next = self._get_parent_next_sibling(node)
-        if parent_next:
-            return parent_next.page_number - 1
-
-        # 如果都没有，返回文档末尾
-        return len(self.reader.pages)
 
     def _get_next_section_title(self, node: PdfOutlineNode) -> str:
         """
@@ -548,38 +593,6 @@ class PdfParser:
 
         return cleaned_text
 
-    def print_outline(self):
-        """打印目录结构"""
-        def print_node(node: PdfOutlineNode, indent: str = ""):
-            if node.level >= 0:  # 不打印根节点
-                # 格式化输出，包含页码信息
-                if hasattr(node, 'next_sibling_page') and node.next_sibling_page:
-                    if node.page_number == node.next_sibling_page - 1:
-                        # 单页章节
-                        page_range = f"第 {node.page_number} 页 (单页)"
-                    else:
-                        # 跨页章节
-                        page_range = f"第 {node.page_number} - {node.next_sibling_page - 1} 页"
-                else:
-                    page_range = f"第 {node.page_number} 页"
-
-                print(f"{indent}📖 {node.title} ({page_range})")
-
-            # 递归打印子节点
-            for i, child in enumerate(node.children):
-                is_last = i == len(node.children) - 1
-                child_indent = indent + ("    " if is_last else "│   ")
-                print_node(child, child_indent)
-
-        if not self.root_node or not self.root_node.children:
-            print("📄 没有找到目录结构")
-            return
-
-        print(f"\n📚 PDF文档目录结构:")
-        print("=" * 50)
-        print_node(self.root_node)
-        print("=" * 50)
-
 
 def main():
     """主函数"""
@@ -635,7 +648,6 @@ def main():
 
                         # 打印目录结构
                         print("📋 目录结构:")
-                        parser.print_outline()
                     else:
                         failed_files += 1
                         print(f"⚠️ 文件 {file} JSON保存失败")
@@ -664,72 +676,7 @@ def main():
         logging.error(f"主程序执行出错: {str(e)}")
         print(f"❌ 程序执行出错: {str(e)}")
 
-def test_precise_content_extraction():
-    """测试精确内容提取功能"""
-    print("\n🧪 测试精确内容提取功能...")
 
-    # 模拟节点结构
-    class MockNode:
-        def __init__(self, title, page_number, parent=None):
-            self.title = title
-            self.page_number = page_number
-            self.parent = parent
-            self.children = []
-
-        def add_child(self, child):
-            child.parent = self
-            self.children.append(child)
-
-    # 创建测试节点树
-    root = MockNode("Root", 0)
-
-    # 第一级节点
-    section1 = MockNode("第一节", 5, root)
-    section2 = MockNode("第二节", 10, root)
-    section3 = MockNode("第三节", 15, root)
-
-    # 第二级节点
-    subsection1_1 = MockNode("1.1 子章节", 6, section1)
-    subsection1_2 = MockNode("1.2 子章节", 8, section1)
-    subsection2_1 = MockNode("2.1 子章节", 11, section2)
-    subsection2_2 = MockNode("2.2 子章节", 13, section2)
-
-    # 构建树结构
-    root.add_child(section1)
-    root.add_child(section2)
-    root.add_child(section3)
-
-    section1.add_child(subsection1_1)
-    section1.add_child(subsection1_2)
-    section2.add_child(subsection2_1)
-    section2.add_child(subsection2_2)
-
-    print("测试用例1 - 同级兄弟节点:")
-    print(f"  当前节点: {subsection1_1.title} (第{subsection1_1.page_number}页)")
-    print(f"  下一兄弟节点: {subsection1_2.title} (第{subsection1_2.page_number}页)")
-    print(f"  预期结束页: {subsection1_2.page_number}")
-
-    print("\n测试用例2 - 父级兄弟节点:")
-    print(f"  当前节点: {subsection1_2.title} (第{subsection1_2.page_number}页)")
-    print(f"  父级下一兄弟节点: {section2.title} (第{section2.page_number}页)")
-    print(f"  预期结束页: {section2.page_number}")
-
-    print("\n测试用例3 - 最后节点:")
-    print(f"  当前节点: {subsection2_2.title} (第{subsection2_2.page_number}页)")
-    print(f"  父级下一兄弟节点: {section3.title} (第{subsection2_2.page_number}页)")
-    print(f"  预期结束页: {section3.page_number}")
-
-    print("\n测试用例4 - 单页章节内容截取:")
-    print("  场景：一个页面包含两个小节")
-    print("  条件：start_page == end_page")
-    print("  修复：在单页章节情况下也能进行内容截取")
-    print("  逻辑：if (page_num == end_page - 1 or start_page == end_page)")
-
-    print("✅ 精确内容提取功能测试完成")
 
 if __name__ == '__main__':
-    # 运行测试
-    test_precise_content_extraction()
-
-    # 运行主程序
     main()
