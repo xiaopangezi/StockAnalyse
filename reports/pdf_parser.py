@@ -14,6 +14,7 @@ import json
 from typing import Dict, List, Tuple, Optional
 from pypdf import PdfReader
 import re
+import pdfplumber
 
 # 设置日志
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
@@ -94,6 +95,11 @@ class PdfParser:
         self.pdf_path = pdf_path
         self.reader = PdfReader(pdf_path)
         self.root_node = None  # 存储目录根节点
+        # 使用 pdfplumber 以支持更精细的文本/表格提取
+        try:
+            self._plumber_pdf = pdfplumber.open(pdf_path)
+        except Exception:
+            self._plumber_pdf = None
 
     def extract_outline(self) -> PdfOutlineNode:
         """
@@ -445,39 +451,114 @@ class PdfParser:
 
             for page_num in page_range:
                 try:
-                    page = self.reader.pages[page_num]
-                    text = page.extract_text()
+                    # 优先使用 pdfplumber 逐行提取并结合表格坐标
+                    if self._plumber_pdf is not None and 0 <= page_num < len(self._plumber_pdf.pages):
+                        plumber_page = self._plumber_pdf.pages[page_num]
 
-                    if not text:
-                        logging.warning(f"第 {page_num + 1} 页没有提取到文本内容")
-                        continue
+                        # 1) 获取当前页面的表格并获取坐标信息
+                        try:
+                            tables = plumber_page.find_tables() or []
+                        except Exception:
+                            tables = []
+                        table_bboxes = []
+                        table_text_map: List[str] = []
+                        for t in tables:
+                            try:
+                                bbox = getattr(t, 'bbox', None)
+                                extracted = t.extract() if hasattr(t, 'extract') else None
+                                if bbox and extracted:
+                                    table_bboxes.append(bbox)
+                                    # 将二维表转为文本行（制表符分隔）
+                                    rows_as_text = ["\t".join([c if c is not None else "" for c in row]) for row in extracted]
+                                    table_text_map.append("\n".join(rows_as_text))
+                            except Exception:
+                                continue
 
-                    # 如果是第一页，从章节标题开始提取
-                    if page_num == start_page:
-                        # 查找章节标题在文本中的位置
-                        title_pos = text.find(node.title)
-                        if title_pos != -1:
-                            text = text[title_pos:]
-                            logging.debug(f"从第 {page_num + 1} 页标题位置开始提取: '{node.title}'")
-                        else:
-                            logging.debug(f"在第 {page_num + 1} 页未找到标题: '{node.title}'")
+                        # 2) 使用 extract_text_lines 获取当前页面的行信息
+                        try:
+                            lines = plumber_page.extract_text_lines() or []
+                        except Exception:
+                            # 回退到纯文本
+                            lines_text = plumber_page.extract_text() or ""
+                            lines = ([{"text": ln}] for ln in lines_text.splitlines())
 
-                    # 如果是最后一页或者是单页章节，都需要检查是否需要截取到下一小节标题开头
-                    if (page_num == end_page or start_page == end_page) and end_page < len(self.reader.pages):
-                        next_section_title = self._get_next_section_title(node)
-                        if next_section_title:
-                            # 查找下一小节标题在文本中的位置
-                            next_title_pos = text.find(next_section_title)
-                            if next_title_pos != -1:
-                                text = text[:next_title_pos]
-                                logging.debug(f"在第 {page_num + 1} 页截取到下一小节标题: '{next_section_title}'")
-                            else:
-                                logging.debug(f"在第 {page_num + 1} 页未找到下一小节标题: '{next_section_title}'")
+                        emitted_table_indices = set()
+                        page_lines_collected: List[str] = []
 
-                    # 清理文本内容
+                        def line_in_bbox(line_obj, bbox) -> bool:
+                            try:
+                                x0 = line_obj.get('x0'); x1 = line_obj.get('x1')
+                                top = line_obj.get('top'); bottom = line_obj.get('bottom')
+                                bx0, btop, bx1, bbottom = bbox
+                                if x0 is None or x1 is None or top is None or bottom is None:
+                                    return False
+                                # 判定行框是否与表格框相交（容差）
+                                x_overlap = not (x1 < bx0 or x0 > bx1)
+                                y_overlap = not (bottom < btop or top > bbottom)
+                                return x_overlap and y_overlap
+                            except Exception:
+                                return False
+
+                        # 将行与表格对应：若行落在某表格内，则用表格文本替代；避免重复输出同一张表
+                        for line in lines:
+                            text_line = (line.get('text') if isinstance(line, dict) else str(line)).strip()
+                            if not text_line:
+                                continue
+                            replaced_by_table = False
+                            for idx, bbox in enumerate(table_bboxes):
+                                if line_in_bbox(line, bbox):
+                                    if idx not in emitted_table_indices:
+                                        emitted_table_indices.add(idx)
+                                        if idx < len(table_text_map):
+                                            page_lines_collected.append(table_text_map[idx])
+                                    replaced_by_table = True
+                                    break
+                            if not replaced_by_table:
+                                page_lines_collected.append(text_line)
+
+                        # 2.1 如果是 start_page，根据标题定位开始行
+                        if page_num == start_page and page_lines_collected:
+                            start_index = 0
+                            for i, ln in enumerate(page_lines_collected):
+                                if node.title and node.title in ln:
+                                    start_index = i
+                                    break
+                            page_lines_collected = page_lines_collected[start_index:]
+
+                        # 2.3 如果是 end_page，根据下一章节标题截断
+                        if (page_num == end_page or start_page == end_page) and end_page < len(self.reader.pages):
+                            next_section_title = self._get_next_section_title(node)
+                            if next_section_title:
+                                cut_index = None
+                                for i, ln in enumerate(page_lines_collected):
+                                    if next_section_title in ln:
+                                        cut_index = i
+                                        break
+                                if cut_index is not None:
+                                    page_lines_collected = page_lines_collected[:cut_index]
+
+                        text = "\n".join(page_lines_collected)
+                    else:
+                        # 回退到 pypdf 简单提取
+                        page = self.reader.pages[page_num]
+                        text = page.extract_text()
+                        if not text:
+                            logging.warning(f"第 {page_num + 1} 页没有提取到文本内容")
+                            continue
+                        if page_num == start_page:
+                            title_pos = text.find(node.title)
+                            if title_pos != -1:
+                                text = text[title_pos:]
+                        if (page_num == end_page or start_page == end_page) and end_page < len(self.reader.pages):
+                            next_section_title = self._get_next_section_title(node)
+                            if next_section_title:
+                                next_title_pos = text.find(next_section_title)
+                                if next_title_pos != -1:
+                                    text = text[:next_title_pos]
+
                     text = self._clean_text(text)
-                    content.append(text)
-
+                    if text:
+                        content.append(text)
                 except Exception as e:
                     logging.error(f"提取第 {page_num + 1} 页内容时出错: {str(e)}")
                     continue
