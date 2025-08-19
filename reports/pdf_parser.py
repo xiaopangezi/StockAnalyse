@@ -639,7 +639,7 @@ class PdfParser:
             r'^\s*-\s*\d+\s*-\s*$',  # -X-格式页码
             r'^.{0,3}$',  # 极短的行（3个字符以下）
             r'^\s*(公司|股份|有限|年度|报告|年报)\s*$',  # 常见的页眉关键词
-            r'^\s*\d{4}\s*年\s*(年度报告|半年报|季报)\s*$',  # 年份报告标题
+            r'^\s*[\u4e00-\u9fa5A-Za-z0-9（）()·、\s]*\d{4}\s*年\s*(年度报告|半年度报告|半年报|季报)\s*(全文|摘要)?[\u4e00-\u9fa5A-Za-z0-9（）()·、\s]*$',  # 年份报告标题
         ]
 
         for line in lines:
@@ -663,8 +663,6 @@ class PdfParser:
         # 重新组合文本
         cleaned_text = '\n'.join(cleaned_lines)
 
-        # 移除多余的空白字符
-        cleaned_text = re.sub(r'\s+', ' ', cleaned_text)
 
         # 移除行首行尾空白
         cleaned_text = cleaned_text.strip()
