@@ -43,7 +43,7 @@ source .venv/bin/activate
 uv pip install -r pyproject.toml
 
 # Start web interface
-streamlit run reports/app.py
+streamlit run LLM/app.py
 
 # Run stock screening (from project root)
 python -c "from analyze.strategies_buffett import screen_stocks; screen_stocks()"
@@ -61,7 +61,7 @@ python -c "from analyze.strategies_buffett import screen_stocks; screen_stocks(i
 ### AI Report Processing
 ```bash
 # Process company reports (from project root)
-python -c "from reports.LLM_reports import ReportAnalyzer; ReportAnalyzer('results/txt_reports', 'results').process_company('000001')"
+python -c "from LLM.LLM_reports import ReportAnalyzer; ReportAnalyzer('results/txt_reports', 'results').process_company('000001')"
 ```
 
 ## Environment Setup
@@ -80,9 +80,10 @@ YOUR_SITE_NAME=StockAnalyse
 ├── analyze/                    # Financial analysis package
 │   ├── stock_data_fetcher.py   # AKShare data retrieval
 │   └── strategies_buffett.py   # Buffett screening logic
-├── reports/                    # AI analysis package
+├── LLM/                        # LLM app and engine
 │   ├── LLM_reports.py          # Multi-agent AI system
-│   ├── app.py                  # Streamlit web interface
+│   └── app.py                  # Streamlit web interface
+├── reports/                    # PDF and report processing
 │   ├── pdf_parser.py           # PDF processing utilities
 │   └── download_reports.py     # Report download automation
 ├── results/                    # Generated outputs
@@ -124,6 +125,6 @@ YOUR_SITE_NAME=StockAnalyse
 - Final reports saved to `results/[company_code]_analysis_[timestamp].txt`
 
 ### For Web Interface
-- Access via `http://localhost:8501` after `streamlit run reports/app.py`
+- Access via `http://localhost:8501` after `streamlit run LLM/app.py`
 - Supports natural language queries about stocks and reports
 - Real-time chat with AI financial analyst

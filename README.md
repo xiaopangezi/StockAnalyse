@@ -40,7 +40,7 @@ python reports/pdf_parser.py
 
 ### 2. 启动 Streamlit 分析界面
 ```bash
-streamlit run reports/app.py
+streamlit run LLM/app.py
 ```
 
 ### 3. 下载 PDF 年报

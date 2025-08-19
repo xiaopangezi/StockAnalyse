@@ -9,8 +9,8 @@
 ```
 reports/
 ├── __init__.py              # 模块初始化文件
-├── app.py                   # Streamlit Web应用主界面
-├── LLM_reports.py           # AI报告分析核心引擎
+├── ../LLM/app.py            # Streamlit Web应用主界面（已迁移到根目录下 LLM/）
+├── ../LLM/LLM_reports.py    # AI报告分析核心引擎（已迁移到根目录下 LLM/）
 ├── pdf_parser.py            # PDF文档解析器
 ├── download_reports.py      # 年报下载工具
 ├── fetch_reports.py         # 巨潮资讯网爬虫
@@ -20,7 +20,7 @@ reports/
 
 ## 核心文件详解
 
-### 1. `app.py` - Streamlit Web应用界面
+### 1. `LLM/app.py` - Streamlit Web应用界面
 
 **功能描述：**
 - 创建基于Streamlit的聊天界面，用于与年报分析AI进行交互
@@ -35,7 +35,7 @@ reports/
 
 **使用方法：**
 ```bash
-streamlit run reports/app.py
+streamlit run LLM/app.py
 ```
 
 **技术架构：**
@@ -43,7 +43,7 @@ streamlit run reports/app.py
 - 集成LangChain的Streamlit组件
 - 支持流式输出和实时交互
 
-### 2. `LLM_reports.py` - AI报告分析核心引擎
+### 2. `LLM/LLM_reports.py` - AI报告分析核心引擎
 
 **功能描述：**
 - 实现多代理AI系统，专门用于分析公司年报
@@ -186,12 +186,12 @@ PDF文件 → pdf_parser.py → 解析目录结构 → 提取章节内容 → �
 
 ### 3. AI分析流程
 ```
-JSON报告 → LLM_reports.py → 向量化存储 → 语义搜索 → AI分析 → 生成报告
+JSON报告 → LLM/LLM_reports.py → 向量化存储 → 语义搜索 → AI分析 → 生成报告
 ```
 
 ### 4. 用户交互流程
 ```
-用户查询 → app.py → LLM_reports.py → 向量搜索 → AI分析 → 返回结果
+用户查询 → LLM/app.py → LLM/LLM_reports.py → 向量搜索 → AI分析 → 返回结果
 ```
 
 ## 配置要求
